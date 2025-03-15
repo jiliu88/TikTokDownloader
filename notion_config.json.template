@@ -2,5 +2,13 @@
     "notion_token": "你的Notion API令牌，格式如：secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "database_id": "你的Notion数据库ID，格式如：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "download_dir": "Download/Notion",
-    "upload_to_notion": true
+    "upload_to_notion": true,
+    "oss": {
+        "enable": true,
+        "access_key_id": "你的阿里云AccessKeyID",
+        "access_key_secret": "你的阿里云AccessKeySecret",
+        "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+        "bucket_name": "你的Bucket名称",
+        "base_url": "https://你的Bucket名称.oss-cn-hangzhou.aliyuncs.com"
+    }
 } 
