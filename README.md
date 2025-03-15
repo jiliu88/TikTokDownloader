@@ -410,3 +410,50 @@ A: 由于权限限制，您无法直接触发主仓库的 Actions。请通过 Fo
 * https://github.com/lxml/lxml
 * https://ffmpeg.org/ffmpeg-all.html
 * https://html5up.net/hyperspace
+
+## Notion抖音视频下载器
+
+这个工具可以自动从Notion数据库中获取抖音视频链接，下载视频，并更新Notion中的状态。
+
+### 配置说明
+
+1. 复制配置文件模板并修改：
+   ```bash
+   cp notion_config.json.template notion_config.json
+   ```
+
+2. 编辑`notion_config.json`文件，填入你的Notion API令牌和数据库ID：
+   ```json
+   {
+       "notion_token": "你的Notion API令牌",
+       "database_id": "你的Notion数据库ID",
+       "download_dir": "Download/Notion",
+       "upload_to_notion": true,
+       "is_tiktok": false
+   }
+   ```
+
+   - `notion_token`: Notion API令牌，可以在[Notion开发者页面](https://www.notion.so/my-integrations)创建
+   - `database_id`: Notion数据库ID，可以从数据库URL中获取
+   - `download_dir`: 视频下载目录
+   - `upload_to_notion`: 是否将下载状态更新到Notion
+   - `is_tiktok`: 是否为TikTok视频（默认为抖音视频）
+
+### 使用方法
+
+直接运行脚本即可：
+
+```bash
+python notion_downloader_main.py
+```
+
+脚本会自动：
+1. 从配置文件加载设置
+2. 查询Notion数据库中状态为"待下载"的页面
+3. 下载视频并更新页面状态为"已下载"或"下载失败"
+
+### 注意事项
+
+- 配置文件`notion_config.json`包含敏感信息，已添加到`.gitignore`中，不会上传到Git仓库
+- 请确保Notion数据库中有一个名为"抖音状态"的属性，用于标记下载状态
+- 视频链接可以存储在名为"抖音链接"、"URL"、"视频链接"、"Link"或"链接"的属性中

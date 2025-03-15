@@ -1,135 +1,310 @@
 """
 文件: notion_downloader_main.py
-作用: Notion抖音视频下载器的入口脚本
+作用: Notion抖音视频下载器的入口脚本，使用tiktok_downloader_api实现下载功能
+自动从notion_config.json获取配置并执行下载
 """
 
 import asyncio
 import os
 import json
-import argparse
 from pathlib import Path
 import httpx
+from typing import Optional, Dict, Any, List
 
-from src.notion_downloader import NotionDownloader
 from src.tools import ColorfulConsole
+from tiktok_downloader_api import download_douyin_video, download_tiktok_video, _download_video
+
+
+class NotionManager:
+    """Notion数据库管理器"""
+    
+    def __init__(self, token: str, database_id: str, console: ColorfulConsole):
+        """
+        初始化Notion管理器
+        
+        Args:
+            token: Notion API令牌
+            database_id: Notion数据库ID
+            console: 控制台对象
+        """
+        self.token = token
+        self.database_id = database_id
+        self.console = console
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        }
+    
+    async def query_database(self, filter_params: Optional[Dict] = None) -> List[Dict]:
+        """
+        查询Notion数据库
+        
+        Args:
+            filter_params: 过滤参数
+            
+        Returns:
+            查询结果列表
+        """
+        url = f"https://api.notion.com/v1/databases/{self.database_id}/query"
+        payload = {}
+        
+        if filter_params:
+            payload["filter"] = filter_params
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=self.headers, json=payload)
+                
+                if response.status_code != 200:
+                    self.console.error(f"查询Notion数据库失败: {response.text}")
+                    return []
+                    
+                data = response.json()
+                return data.get("results", [])
+        except Exception as e:
+            self.console.error(f"查询Notion数据库时出错: {str(e)}")
+            import traceback
+            self.console.error(traceback.format_exc())
+            return []
+    
+    def get_url_from_page(self, page: Dict) -> Optional[str]:
+        """
+        从页面中获取视频URL
+        
+        Args:
+            page: 页面数据
+            
+        Returns:
+            视频URL或None
+        """
+        properties = page.get("properties", {})
+        
+        # 根据截图中的数据库结构，主要从"抖音url"属性获取URL
+        if url_prop := properties.get("抖音url"):
+            # 检查属性类型
+            if "url" in url_prop:
+                return url_prop["url"]
+            elif "rich_text" in url_prop and url_prop["rich_text"]:
+                for text in url_prop["rich_text"]:
+                    if "text" in text and "content" in text["text"]:
+                        content = text["text"]["content"]
+                        if content.startswith(("http://", "https://")):
+                            return content
+        
+        return None
+    
+    async def update_page_status(self, page_id: str, status: str) -> bool:
+        """
+        更新页面状态
+        
+        Args:
+            page_id: 页面ID
+            status: 新状态
+            
+        Returns:
+            是否更新成功
+        """
+        # 首先获取页面信息，确定状态属性的类型
+        url = f"https://api.notion.com/v1/pages/{page_id}"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=self.headers)
+                
+                if response.status_code != 200:
+                    self.console.error(f"获取Notion页面失败: {response.text}")
+                    return False
+                
+                page = response.json()
+                status_property = page.get("properties", {}).get("抖音状态", {})
+                status_type = None
+                
+                if "select" in status_property:
+                    status_type = "select"
+                elif "rich_text" in status_property:
+                    status_type = "rich_text"
+                elif "title" in status_property:
+                    status_type = "title"
+                elif "status" in status_property:
+                    status_type = "status"
+                
+                # 准备更新属性
+                properties = {}
+                if status_type == "select":
+                    properties = {
+                        "抖音状态": {
+                            "select": {
+                                "name": status
+                            }
+                        }
+                    }
+                elif status_type == "rich_text":
+                    properties = {
+                        "抖音状态": {
+                            "rich_text": [
+                                {
+                                    "text": {
+                                        "content": status
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                elif status_type == "title":
+                    properties = {
+                        "抖音状态": {
+                            "title": [
+                                {
+                                    "text": {
+                                        "content": status
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                elif status_type == "status":
+                    properties = {
+                        "抖音状态": {
+                            "status": {
+                                "name": status
+                            }
+                        }
+                    }
+                else:
+                    self.console.error(f"未找到抖音状态属性或不支持的属性类型")
+                    return False
+                
+                # 更新页面
+                payload = {
+                    "properties": properties
+                }
+                
+                response = await client.patch(url, headers=self.headers, json=payload)
+                
+                if response.status_code != 200:
+                    self.console.error(f"更新Notion页面失败: {response.text}")
+                    return False
+                
+                return True
+        except Exception as e:
+            self.console.error(f"更新Notion页面状态时出错: {str(e)}")
+            import traceback
+            self.console.error(traceback.format_exc())
+            return False
+
+
+async def download_and_update(
+    notion: NotionManager, 
+    page: Dict, 
+    download_dir: str, 
+    console: ColorfulConsole,
+    is_tiktok: bool = False
+) -> None:
+    """
+    下载视频并更新Notion页面状态
+    
+    Args:
+        notion: Notion管理器
+        page: 页面数据
+        download_dir: 下载目录
+        console: 控制台对象
+        is_tiktok: 是否为TikTok视频
+    """
+    # 获取视频URL
+    url = notion.get_url_from_page(page)
+    if not url:
+        console.info(f"页面 {page['id']} 没有找到视频URL，跳过")
+        return
+    
+    console.info(f"开始下载视频: {url}")
+    
+    # 直接调用异步下载函数，而不是通过download_douyin_video或download_tiktok_video
+    result = await _download_video(url, is_tiktok, download_dir)
+    
+    page_id = page["id"]
+    
+    if result["success"]:
+        console.print(f"视频下载成功: {result['video_path']}")
+        # 更新Notion页面状态为"已下载"
+        if await notion.update_page_status(page_id, "已下载"):
+            console.info(f"已更新页面状态为: 已下载")
+        else:
+            console.error(f"更新页面状态失败")
+    else:
+        console.error(f"视频下载失败: {url}")
+        console.error(f"错误信息: {result['message']}")
+        # 更新Notion页面状态为"下载失败"
+        if await notion.update_page_status(page_id, "下载失败"):
+            console.info(f"已更新页面状态为: 下载失败")
+        else:
+            console.error(f"更新页面状态失败")
 
 
 async def main():
     """
-    主函数
+    主函数 - 从notion_config.json获取配置并自动执行下载
     """
-    # 创建命令行参数解析器
-    parser = argparse.ArgumentParser(description="从Notion下载抖音视频")
-    parser.add_argument("--token", help="Notion API令牌")
-    parser.add_argument("--database", help="Notion数据库ID")
-    parser.add_argument("--config", help="配置文件路径", default="notion_config.json")
-    parser.add_argument("--download-dir", help="下载目录", default="Download/Notion")
-    parser.add_argument("--upload", help="是否将下载的视频上传回Notion", action="store_true")
-    parser.add_argument("--url", help="直接下载指定的抖音URL")
-    
-    args = parser.parse_args()
-    
     console = ColorfulConsole()
     
-    # 获取Notion API令牌和数据库ID
-    notion_token = args.token or os.environ.get("NOTION_TOKEN", "")
-    database_id = args.database or os.environ.get("NOTION_DATABASE_ID", "")
-    download_dir = args.download_dir or os.environ.get("NOTION_DOWNLOAD_DIR", "Download/Notion")
-    upload_to_notion = args.upload
+    # 从配置文件加载设置
+    config_path = Path("notion_config.json")
+    if not config_path.exists():
+        console.error(f"配置文件 {config_path} 不存在！")
+        console.info("请创建配置文件，包含以下内容：")
+        console.info("""
+{
+    "notion_token": "你的Notion API令牌",
+    "database_id": "你的数据库ID",
+    "download_dir": "Download/Notion",
+    "is_tiktok": false
+}
+        """)
+        return
     
-    # 如果命令行参数和环境变量都没有提供，尝试从配置文件加载
-    if not notion_token or not database_id:
-        config_path = Path(args.config)
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                    notion_token = notion_token or config.get("notion_token", "")
-                    database_id = database_id or config.get("database_id", "")
-                    download_dir = download_dir or config.get("download_dir", "Download/Notion")
-                    # 如果配置文件中有upload_to_notion设置，则使用它
-                    if "upload_to_notion" in config and not args.upload:
-                        upload_to_notion = config.get("upload_to_notion", False)
-                    console.info(f"已从配置文件 {config_path} 加载设置")
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                console.error(f"读取配置文件失败: {str(e)}")
-        else:
-            console.warning(f"配置文件 {config_path} 不存在")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            
+        notion_token = config.get("notion_token", "")
+        database_id = config.get("database_id", "")
+        download_dir = config.get("download_dir", "Download/Notion")
+        is_tiktok = config.get("is_tiktok", False)
+        
+        console.info(f"已从配置文件 {config_path} 加载设置")
+        console.info(f"数据库ID: {database_id}")
+        console.info(f"下载目录: {download_dir}")
+        console.info(f"视频类型: {'TikTok' if is_tiktok else '抖音'}")
+        
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        console.error(f"读取配置文件失败: {str(e)}")
+        return
     
     # 检查是否有必要的配置
     if not notion_token:
         console.error("错误: 未设置Notion API令牌")
-        console.info("请通过以下方式之一设置Notion API令牌:")
-        console.info("1. 命令行参数: --token YOUR_TOKEN")
-        console.info("2. 环境变量: NOTION_TOKEN=YOUR_TOKEN")
-        console.info("3. 配置文件: notion_config.json")
         return
     
-    if not database_id and not args.url:
-        console.error("错误: 未设置Notion数据库ID或直接下载URL")
-        console.info("请通过以下方式之一设置Notion数据库ID:")
-        console.info("1. 命令行参数: --database YOUR_DATABASE_ID")
-        console.info("2. 环境变量: NOTION_DATABASE_ID=YOUR_DATABASE_ID")
-        console.info("3. 配置文件: notion_config.json")
-        console.info("或者使用 --url 参数直接指定要下载的抖音URL")
+    if not database_id:
+        console.error("错误: 未设置Notion数据库ID")
         return
     
     # 创建下载目录
     os.makedirs(download_dir, exist_ok=True)
     
-    # 运行下载器
-    console.info(f"使用数据库ID: {database_id}")
-    console.info(f"下载目录: {download_dir}")
-    console.info(f"是否上传到Notion: {'是' if upload_to_notion else '否'}")
-    
     try:
-        # 创建NotionDownloader实例
-        downloader = NotionDownloader(notion_token, database_id, download_dir)
-        
-        # 如果指定了直接下载URL，则直接下载
-        if args.url:
-            console.info(f"直接下载URL: {args.url}")
-            video_path = await downloader.download_video(args.url)
-            if video_path:
-                console.print(f"视频下载成功: {video_path}")
-            else:
-                console.error(f"视频下载失败: {args.url}")
-            return
-        
-        # 否则，查询Notion数据库并下载视频
-        # 使用传统的HTTP请求方式查询Notion数据库
-        headers = {
-            "Authorization": f"Bearer {notion_token}",
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28"
-        }
+        # 创建Notion管理器
+        notion = NotionManager(notion_token, database_id, console)
         
         # 查询待下载的视频
-        url = f"https://api.notion.com/v1/databases/{database_id}/query"
-        payload = {
-            "filter": {
-                "property": "抖音状态",
-                "status": {
-                    "equals": "待下载"
-                }
+        filter_params = {
+            "property": "抖音状态",
+            "status": {
+                "equals": "待下载"
             }
         }
         
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, headers=headers, json=payload)
-                
-                if response.status_code != 200:
-                    console.error(f"查询Notion数据库失败: {response.text}")
-                    return
-                    
-                data = response.json()
-                pages = data.get("results", [])
-        except Exception as e:
-            console.error(f"查询Notion数据库时出错: {str(e)}")
-            import traceback
-            console.error(traceback.format_exc())
-            return
+        pages = await notion.query_database(filter_params)
         
         if not pages:
             console.info("没有找到待下载的视频")
@@ -137,169 +312,10 @@ async def main():
             
         console.info(f"找到 {len(pages)} 个待下载的视频")
         
-        # 下载视频
+        # 下载视频并更新状态
         for page in pages:
-            # 获取视频URL
-            url = downloader.get_url_from_page(page)
-            if not url:
-                console.info(f"页面 {page['id']} 没有找到视频URL，跳过")
-                continue
+            await download_and_update(notion, page, download_dir, console, is_tiktok)
             
-            console.info(f"开始下载视频: {url}")
-            
-            # 下载视频
-            video_path = await downloader.download_video(url)
-            
-            if video_path:
-                console.print(f"视频下载成功: {video_path}")
-                
-                # 更新Notion数据库中的状态
-                page_id = page["id"]
-                
-                # 获取状态属性类型
-                status_property = page.get("properties", {}).get("抖音状态", {})
-                status_type = None
-                
-                if "select" in status_property:
-                    status_type = "select"
-                elif "rich_text" in status_property:
-                    status_type = "rich_text"
-                elif "title" in status_property:
-                    status_type = "title"
-                elif "status" in status_property:
-                    status_type = "status"
-                
-                # 准备更新属性
-                properties = {}
-                if status_type == "select":
-                    properties = {
-                        "抖音状态": {
-                            "select": {
-                                "name": "已下载"
-                            }
-                        }
-                    }
-                elif status_type == "rich_text":
-                    properties = {
-                        "抖音状态": {
-                            "rich_text": [
-                                {
-                                    "text": {
-                                        "content": "已下载"
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                elif status_type == "title":
-                    properties = {
-                        "抖音状态": {
-                            "title": [
-                                {
-                                    "text": {
-                                        "content": "已下载"
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                elif status_type == "status":
-                    properties = {
-                        "抖音状态": {
-                            "status": {
-                                "name": "已下载"
-                            }
-                        }
-                    }
-                
-                # 更新页面
-                update_url = f"https://api.notion.com/v1/pages/{page_id}"
-                payload = {
-                    "properties": properties
-                }
-                
-                async with httpx.AsyncClient() as client:
-                    response = await client.patch(update_url, headers=headers, json=payload)
-                    
-                    if response.status_code != 200:
-                        console.error(f"更新Notion页面失败: {response.text}")
-                    else:
-                        console.info(f"已更新页面状态为: 已下载")
-            else:
-                console.error(f"视频下载失败: {url}")
-                
-                # 更新Notion数据库中的状态为"下载失败"
-                page_id = page["id"]
-                
-                # 获取状态属性类型
-                status_property = page.get("properties", {}).get("抖音状态", {})
-                status_type = None
-                
-                if "select" in status_property:
-                    status_type = "select"
-                elif "rich_text" in status_property:
-                    status_type = "rich_text"
-                elif "title" in status_property:
-                    status_type = "title"
-                elif "status" in status_property:
-                    status_type = "status"
-                
-                # 准备更新属性
-                properties = {}
-                if status_type == "select":
-                    properties = {
-                        "抖音状态": {
-                            "select": {
-                                "name": "下载失败"
-                            }
-                        }
-                    }
-                elif status_type == "rich_text":
-                    properties = {
-                        "抖音状态": {
-                            "rich_text": [
-                                {
-                                    "text": {
-                                        "content": "下载失败"
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                elif status_type == "title":
-                    properties = {
-                        "抖音状态": {
-                            "title": [
-                                {
-                                    "text": {
-                                        "content": "下载失败"
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                elif status_type == "status":
-                    properties = {
-                        "抖音状态": {
-                            "status": {
-                                "name": "下载失败"
-                            }
-                        }
-                    }
-                
-                # 更新页面
-                update_url = f"https://api.notion.com/v1/pages/{page_id}"
-                payload = {
-                    "properties": properties
-                }
-                
-                async with httpx.AsyncClient() as client:
-                    response = await client.patch(update_url, headers=headers, json=payload)
-                    
-                    if response.status_code != 200:
-                        console.error(f"更新Notion页面失败: {response.text}")
-                    else:
-                        console.info(f"已更新页面状态为: 下载失败")
     except Exception as e:
         console.error(f"运行下载器时出错: {str(e)}")
         import traceback
@@ -307,4 +323,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

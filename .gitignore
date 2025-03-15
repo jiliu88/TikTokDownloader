@@ -1,9 +1,14 @@
 *.db
+# 配置文件，但保留模板
 *.json
+!notion_config.json.template
 *.log
 *.xlsx
 *.csv
 *.spec
+
+# 特别指定不上传的配置文件
+notion_config.json
 
 # Python相关忽略
 __pycache__/

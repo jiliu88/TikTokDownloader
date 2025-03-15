@@ -1,6 +1,7 @@
 {
-    "notion_token": "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",
-    "database_id": "1b16288a9e16801cabe9eaffc645e9fa",
+    "notion_token": "你的Notion API令牌，格式如：secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "database_id": "你的Notion数据库ID，格式如：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "download_dir": "Download/Notion",
-    "upload_to_notion": true
+    "upload_to_notion": true,
+    "is_tiktok": false
 } 
