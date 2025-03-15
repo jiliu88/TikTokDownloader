@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-TikTok下载器API
+抖音下载器API
 
-提供可以在其他Python代码中调用的函数，用于下载单个视频。
+提供可以在其他Python代码中调用的函数，用于下载单个抖音视频。
 """
 
 from asyncio import run
@@ -13,11 +13,11 @@ from typing import Optional, List, Dict, Any, Union
 
 async def _download_video(url: str, is_tiktok: bool = False, output_dir: Optional[str] = None) -> Dict[str, Any]:
     """
-    下载单个视频的异步实现
+    下载单个抖音视频的异步实现
     
     Args:
         url: 视频链接
-        is_tiktok: 是否为TikTok视频，默认为False（抖音视频）
+        is_tiktok: 保留参数，但始终使用False（抖音视频）
         output_dir: 输出目录，默认为None（使用配置文件中的设置）
         
     Returns:
@@ -57,7 +57,7 @@ async def _download_video(url: str, is_tiktok: bool = False, output_dir: Optiona
             # 下载视频
             async with logger(root, console=downloader.console, **params) as record:
                 # 提取视频ID
-                link_obj = tiktok.links_tiktok if is_tiktok else tiktok.links
+                link_obj = tiktok.links
                 ids = await link_obj.run(url)
                 
                 if not any(ids):
@@ -65,7 +65,7 @@ async def _download_video(url: str, is_tiktok: bool = False, output_dir: Optiona
                     return result
                 
                 # 处理视频
-                preview_image = await tiktok._handle_detail(ids, is_tiktok, record)
+                preview_image = await tiktok._handle_detail(ids, False, record)
                 
                 # 查找下载的视频文件
                 download_dir = downloader.parameter.root
@@ -96,21 +96,6 @@ async def _download_video(url: str, is_tiktok: bool = False, output_dir: Optiona
         return result
 
 
-def download_video(url: str, is_tiktok: bool = False, output_dir: Optional[str] = None) -> Dict[str, Any]:
-    """
-    下载单个视频
-    
-    Args:
-        url: 视频链接
-        is_tiktok: 是否为TikTok视频，默认为False（抖音视频）
-        output_dir: 输出目录，默认为None（使用配置文件中的设置）
-        
-    Returns:
-        包含下载结果的字典
-    """
-    return run(_download_video(url, is_tiktok, output_dir))
-
-
 def download_douyin_video(url: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     下载抖音视频
@@ -122,21 +107,7 @@ def download_douyin_video(url: str, output_dir: Optional[str] = None) -> Dict[st
     Returns:
         包含下载结果的字典
     """
-    return download_video(url, False, output_dir)
-
-
-def download_tiktok_video(url: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
-    """
-    下载TikTok视频
-    
-    Args:
-        url: TikTok视频链接
-        output_dir: 输出目录，默认为None（使用配置文件中的设置）
-        
-    Returns:
-        包含下载结果的字典
-    """
-    return download_video(url, True, output_dir)
+    return run(_download_video(url, False, output_dir))
 
 
 # 使用示例
@@ -145,10 +116,4 @@ if __name__ == "__main__":
     result = download_douyin_video("https://v.douyin.com/sVlvRD0ljNM/")
     print(f"下载结果: {result['success']}")
     print(f"消息: {result['message']}")
-    print(f"视频路径: {result['video_path']}")
-    
-    # 下载TikTok视频
-    # result = download_tiktok_video("https://www.tiktok.com/@用户名/video/视频ID")
-    # print(f"下载结果: {result['success']}")
-    # print(f"消息: {result['message']}")
-    # print(f"视频路径: {result['video_path']}") 
+    print(f"视频路径: {result['video_path']}") 

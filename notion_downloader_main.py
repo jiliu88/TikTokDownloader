@@ -12,7 +12,7 @@ import httpx
 from typing import Optional, Dict, Any, List
 
 from src.tools import ColorfulConsole
-from tiktok_downloader_api import download_douyin_video, download_tiktok_video, _download_video
+from tiktok_downloader_api import _download_video
 
 
 class NotionManager:
@@ -198,8 +198,7 @@ async def download_and_update(
     notion: NotionManager, 
     page: Dict, 
     download_dir: str, 
-    console: ColorfulConsole,
-    is_tiktok: bool = False
+    console: ColorfulConsole
 ) -> None:
     """
     下载视频并更新Notion页面状态
@@ -209,7 +208,6 @@ async def download_and_update(
         page: 页面数据
         download_dir: 下载目录
         console: 控制台对象
-        is_tiktok: 是否为TikTok视频
     """
     # 获取视频URL
     url = notion.get_url_from_page(page)
@@ -219,8 +217,8 @@ async def download_and_update(
     
     console.info(f"开始下载视频: {url}")
     
-    # 直接调用异步下载函数，而不是通过download_douyin_video或download_tiktok_video
-    result = await _download_video(url, is_tiktok, download_dir)
+    # 调用异步下载函数，is_tiktok参数固定为False
+    result = await _download_video(url, False, download_dir)
     
     page_id = page["id"]
     
@@ -256,8 +254,7 @@ async def main():
 {
     "notion_token": "你的Notion API令牌",
     "database_id": "你的数据库ID",
-    "download_dir": "Download/Notion",
-    "is_tiktok": false
+    "download_dir": "Download/Notion"
 }
         """)
         return
@@ -269,12 +266,10 @@ async def main():
         notion_token = config.get("notion_token", "")
         database_id = config.get("database_id", "")
         download_dir = config.get("download_dir", "Download/Notion")
-        is_tiktok = config.get("is_tiktok", False)
         
         console.info(f"已从配置文件 {config_path} 加载设置")
         console.info(f"数据库ID: {database_id}")
         console.info(f"下载目录: {download_dir}")
-        console.info(f"视频类型: {'TikTok' if is_tiktok else '抖音'}")
         
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         console.error(f"读取配置文件失败: {str(e)}")
@@ -314,7 +309,7 @@ async def main():
         
         # 下载视频并更新状态
         for page in pages:
-            await download_and_update(notion, page, download_dir, console, is_tiktok)
+            await download_and_update(notion, page, download_dir, console)
             
     except Exception as e:
         console.error(f"运行下载器时出错: {str(e)}")
