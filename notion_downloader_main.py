@@ -9,6 +9,7 @@
 2. 查询Notion数据库中状态为"待下载"的条目
 3. 下载每个条目中的抖音视频
 4. 根据下载结果更新Notion中的状态为"已下载"或"下载失败"
+5. 上传视频到阿里云OSS并更新视频URL
 """
 
 import asyncio  # 用于异步编程
@@ -19,6 +20,7 @@ import httpx  # 用于HTTP请求
 from typing import Optional, Dict, Any, List  # 类型提示
 
 from src.tools import ColorfulConsole  # 导入彩色控制台输出工具
+from src.oss_manager import OSSManager  # 导入OSS管理器
 from tiktok_downloader_api import _download_video  # 导入视频下载函数
 
 
@@ -222,12 +224,57 @@ class NotionManager:
             self.console.error(f"更新视频ID时出错: {str(e)}")
             return False
 
+    async def update_video_url(self, page_id: str, video_url: str) -> bool:
+        """
+        更新Notion页面的视频URL
+        
+        Args:
+            page_id: 页面ID
+            video_url: 视频URL
+            
+        Returns:
+            是否更新成功
+        """
+        url = f"https://api.notion.com/v1/pages/{page_id}"
+        
+        try:
+            properties = {
+                "视频": {
+                    "files": [
+                        {
+                            "type": "external",
+                            "name": "视频文件",
+                            "external": {
+                                "url": video_url
+                            }
+                        }
+                    ]
+                }
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.patch(
+                    url, 
+                    headers=self.headers, 
+                    json={"properties": properties}
+                )
+                
+            if response.status_code != 200:
+                self.console.error(f"更新视频URL失败: {response.text}")
+                return False
+                
+            return True
+        except Exception as e:
+            self.console.error(f"更新视频URL时出错: {str(e)}")
+            return False
+
 
 async def download_and_update(
     notion: NotionManager, 
     page: Dict, 
     download_dir: str, 
-    console: ColorfulConsole
+    console: ColorfulConsole,
+    oss_manager: Optional[OSSManager] = None
 ) -> None:
     """
     下载视频并更新Notion页面状态
@@ -237,6 +284,7 @@ async def download_and_update(
         page: 页面数据，包含视频URL等信息
         download_dir: 下载目录，视频将保存到此目录
         console: 控制台对象，用于输出日志
+        oss_manager: OSS管理器，用于上传视频到阿里云OSS
     """
     # 从页面中获取视频URL
     url = notion.get_url_from_page(page)
@@ -245,8 +293,13 @@ async def download_and_update(
         console.info(f"页面 {page['id']} 没有找到视频URL，跳过")
         return
     
-    # 获取视频ID
+    # 调试信息：打印所有属性名称
     properties = page.get("properties", {})
+    console.info("数据库属性列表:")
+    for prop_name, prop_value in properties.items():
+        console.info(f"- {prop_name}: {prop_value.get('type', 'unknown type')}")
+    
+    # 获取视频ID
     video_id = None
     
     # 尝试从页面属性中获取视频ID
@@ -275,6 +328,19 @@ async def download_and_update(
     if result["success"]:
         # 下载成功
         console.print(f"视频下载成功: {result['video_path']}")
+        
+        # 如果提供了OSS管理器，上传视频到OSS
+        if oss_manager and video_id:
+            success, oss_url = await oss_manager.upload_video(result["video_path"], video_id)
+            if success:
+                # 更新Notion中的视频URL
+                if await notion.update_video_url(page_id, oss_url):
+                    console.info(f"已更新视频URL: {oss_url}")
+                else:
+                    console.error("更新视频URL失败")
+            else:
+                console.error(f"上传视频到OSS失败: {oss_url}")
+        
         # 更新Notion页面状态为"已下载"
         if await notion.update_page_status(page_id, "已下载"):
             console.info(f"已更新页面状态为: 已下载")
@@ -302,6 +368,7 @@ async def main():
     4. 获取并更新视频ID
     5. 查询待下载且已有视频ID的视频
     6. 下载视频并更新状态
+    7. 上传视频到阿里云OSS并更新视频URL
     """
     # 创建控制台对象，用于彩色输出
     console = ColorfulConsole()
@@ -356,6 +423,16 @@ async def main():
     try:
         # 创建Notion管理器
         notion = NotionManager(notion_token, database_id, console)
+        
+        # 创建OSS管理器
+        try:
+            # 直接使用config中的配置创建OSS管理器
+            oss_manager = OSSManager(config, console=console)
+            console.info("已初始化阿里云OSS管理器")
+        except Exception as e:
+            console.error(f"初始化OSS管理器失败: {str(e)}")
+            console.error("请检查notion_config.json中的OSS配置是否正确")
+            return  # 如果OSS初始化失败，直接退出程序
         
         # 第一步：查询需要获取视频ID的数据
         # 过滤条件：抖音id为空且抖音url不为空
@@ -430,7 +507,7 @@ async def main():
         
         # 下载视频并更新状态
         for page in pages:
-            await download_and_update(notion, page, download_dir, console)
+            await download_and_update(notion, page, download_dir, console, oss_manager)
             
     except Exception as e:
         # 处理运行过程中的异常
