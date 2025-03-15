@@ -37,7 +37,6 @@ async def _download_video(url: str, is_tiktok: bool = False, output_dir: Optiona
     try:
         async with TikTokDownloader() as downloader:
             # 初始化
-            downloader.project_info()
             downloader.check_config()
             await downloader.check_settings(False)
             
