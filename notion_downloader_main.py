@@ -245,11 +245,28 @@ async def download_and_update(
         console.info(f"页面 {page['id']} 没有找到视频URL，跳过")
         return
     
+    # 获取视频ID
+    properties = page.get("properties", {})
+    video_id = None
+    
+    # 尝试从页面属性中获取视频ID
+    if video_id_prop := properties.get("抖音id"):
+        if "rich_text" in video_id_prop and video_id_prop["rich_text"]:
+            for text in video_id_prop["rich_text"]:
+                if "text" in text and "content" in text["text"]:
+                    video_id = text["text"]["content"]
+                    break
+
+    # 创建以视频ID命名的文件夹
+    video_dir = Path(download_dir) / "notion" / video_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+    
     # 输出开始下载的日志
     console.info(f"开始下载视频: {url}")
+    console.info(f"保存到目录: {video_dir}")
     
     # 调用异步下载函数下载视频
-    result = await _download_video(url, False, download_dir)
+    result = await _download_video(url, False, str(video_dir))
     
     # 获取页面ID，用于更新状态
     page_id = page["id"]
@@ -283,7 +300,7 @@ async def main():
     2. 创建Notion管理器
     3. 先获取所有需要获取视频ID的数据
     4. 获取并更新视频ID
-    5. 查询待下载的视频
+    5. 查询待下载且已有视频ID的视频
     6. 下载视频并更新状态
     """
     # 创建控制台对象，用于彩色输出
@@ -382,13 +399,23 @@ async def main():
         else:
             console.info("没有找到需要获取视频ID的数据")
         
-        # 第二步：查询待下载的视频
-        # 过滤条件：抖音状态 = 待下载
+        # 第二步：查询待下载且已有视频ID的视频
+        # 过滤条件：抖音状态 = 待下载 且 抖音id不为空
         filter_params = {
-            "property": "抖音状态",
-            "status": {
-                "equals": "待下载"
-            }
+            "and": [
+                {
+                    "property": "抖音状态",
+                    "status": {
+                        "equals": "待下载"
+                    }
+                },
+                {
+                    "property": "抖音id",
+                    "rich_text": {
+                        "is_not_empty": True
+                    }
+                }
+            ]
         }
         
         # 执行查询
@@ -396,10 +423,10 @@ async def main():
         
         # 检查查询结果
         if not pages:
-            console.info("没有找到待下载的视频")
+            console.info("没有找到待下载且已有视频ID的视频")
             return
             
-        console.info(f"找到 {len(pages)} 个待下载的视频")
+        console.info(f"找到 {len(pages)} 个待下载且已有视频ID的视频")
         
         # 下载视频并更新状态
         for page in pages:
